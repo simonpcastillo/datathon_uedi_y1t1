@@ -1,0 +1,356 @@
+---
+title: "Code for reproducibility of presentation plots"
+subtitle: "Exam Number: B277001"
+output: 
+  prettydoc::html_pretty:
+    theme: leonids
+    toc: yes
+date: "2024-11-30"
+---
+
+```{r setup, include=TRUE, message=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, tidy.opts = list(width.cutoff = 60), tidy = TRUE)
+
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(bookdown, dplyr, tidyr, ggplot2, ggpubr, ggrepel, ggthemes, gt, janitor, MetBrewer,pander, patchwork, plotly, prettydoc,readr, readxl, sf, skimr, slider, stringr, tidyselect)
+```
+
+
+## International data, source: OECD 
+
+### Data load and preparation
+
+```{r oecd-screening-load}
+# data source: https://data-explorer.oecd.org/vis?fs[0]=Topic%2C1%7CHealth%23HEA%23%7CHealthcare%20use%23HEA_PRC%23&pg=0&fc=Topic&bp=true&snb=10&df[ds]=dsDisseminateFinalDMZ&df[id]=DSD_HEALTH_PROC%40DF_SCREEN&df[ag]=OECD.ELS.HD&df[vs]=1.1&dq=.................&pd=2010%2C&to[TIME_PERIOD]=false
+overall_screening <- read.csv("data/0_screening_oecd_24112024.csv")
+
+overall_screening %>% 
+  filter(DATA_SRCE == "PRG",
+         #using <2015 to match the availability of OECD cancer survival data 
+         TIME_PERIOD < 2015) %>% 
+  mutate(year = as.numeric(TIME_PERIOD), 
+         country = factor(Reference.area),
+         value = OBS_VALUE) %>% 
+  group_by(Cancer.site, country) %>% 
+  #keep countries that have  at least 12 records for the period 2000-2014 for each cancer site
+  filter(length(country) >= 12) %>% 
+  ungroup() %>%
+  #calculate slide window with 5 years lag
+  mutate(value_5y = slider::slide_dbl(value, mean, .before = 4, .after = 0),
+         #create a name_lab variable for plot labels
+         name_lab = if_else(year == 2014, country, NA_character_)) %>% 
+  #filter by years matching the cancer survival records
+  filter(year %in% c(2004, 2009, 2014)) -> df_plt_screening
+
+#generate a named color vector for all countries
+colour_vec_all <- met.brewer("VanGogh2", length(unique(df_plt_screening$country)))
+names(colour_vec_all)<- unique(df_plt_screening$Reference.area)
+
+```
+
+### Data subset for breast neoplasms 
+
+```{r subsetting-breast}
+cancer_site = 'Malignant neoplasms of female breast'
+colour_vec = colour_vec_all[as.character(unique(pull(df_plt_screening[df_plt_screening$Cancer.site == cancer_site, ],'country')))] 
+
+#
+screening_breast <- df_plt_screening %>% 
+  filter(Cancer.site == cancer_site) %>% 
+  select(year, country, value_5y) %>%
+  # create a composed year_country to match with mortality records
+  mutate(year_country = interaction(year, country, sep = '-')) 
+
+```
+
+### Mortality data for breast neoplasms 
+
+```{r oecd-mortality-load}
+# data source:https://data-explorer.oecd.org/vis?fs[0]=Topic%2C1%7CHealth%23HEA%23%7CHealthcare%20quality%20and%20outcomes%23HEA_HCQ%23&pg=0&fc=Topic&bp=true&snb=11&df[ds]=dsDisseminateFinalDMZ&df[id]=DSD_HCQO%40DF_CC&df[ag]=OECD.ELS.HD&df[vs]=1.0&dq=AUT%2BAUS.A.CCCLNTSR..Y_GE15._T.OBS&pd=2004%2C&to[TIME_PERIOD]=false
+overall_inc_mor <- read.csv("data/1_survival_oecd_24112024.csv")
+
+mortality_breast <- overall_inc_mor %>% 
+  filter(Measure == 'Breast cancer five-year net survival',
+         Statistical.operation == 'Observed') %>% 
+  mutate(year = TIME_PERIOD, 
+         country = Reference.area,
+         year_country = interaction(year, country, sep = '-'),
+         mortality = OBS_VALUE) %>% 
+  select(year, country, mortality, year_country)
+```
+
+### Join screening and mortality datasets 
+
+```{r join-breast-data}
+breast_join <- left_join(screening_breast, 
+                         mortality_breast, 
+                         by = 'year_country')
+
+#get color vector for the countries represented
+colour_vec <- colour_vec_all[as.character(unique(pull(breast_join,'country.x')))] 
+```
+
+
+### Density plot Slide 2, panel B 
+
+```{r slide2-plotB}
+screening_breast %>% 
+  mutate(year = case_when(year == 2004 ~"1999-2004",
+                          year == 2009 ~ "2005-2009",
+                          year == 2014 ~ "2010-2014"),
+         year = factor(year)) %>% 
+  ggplot(aes(x = value_5y, color = year, fill = year)) +
+  geom_density(alpha = 0.6) +
+  geom_segment(data = screening_breast %>% 
+                 mutate(year = case_when(year == 2004 ~"1999-2004",
+                                         year == 2009 ~ "2005-2009",
+                                         year == 2014 ~ "2010-2014"),
+                        year = factor(year)) %>% 
+                 group_by(year) %>% 
+                 summarise(median_screening = median(value_5y)) %>% 
+                 ungroup(), 
+               aes(x = median_screening,
+                   xend = median_screening,
+                   y = 0,
+                   yend = Inf),
+               colour= 'grey30')+
+  geom_text(data = screening_breast %>% 
+              mutate(year = case_when(year == 2004 ~"1999-2004",
+                                      year == 2009 ~ "2005-2009",
+                                      year == 2014 ~ "2010-2014"),
+                     year = factor(year)) %>% 
+              group_by(year) %>% 
+              summarise(median_screening = median(value_5y)) %>% 
+              ungroup(),
+            aes(x = 30, y = 0.03,label = paste0('median = ',median_screening, "%")),
+            fontface = 'bold',
+            size = 10, size.unit = "pt") +
+  scale_fill_viridis_d(direction = -1, end = 0.9) +
+  scale_color_viridis_d(direction = -1, end = 0.9) +
+  theme(legend.position="none") +
+  labs(title = 'Screening of malignant neoplasms of the breast',
+       subtitle = "Target population: Female, 50-69 years old. Source: OECD (https://data-explorer.oecd.org/).",
+       x = 'Screening (% target population)',
+       y = 'Density') +
+  guides(fill = 'none', colour= 'none') +
+  facet_wrap(.~year) +
+  theme_minimal() +
+  theme(strip.text = element_text(size = 12, hjust = 0.5,face = "bold"),
+        plot.title = element_text(size = 15, hjust = 0.5,face = "bold"),
+        plot.subtitle = element_text(size=8,hjust = 0.5,face = "bold")) -> density_breast
+
+print(density_breast)
+
+#uncomment lines below for saving
+
+# png("Rplots/density_breast.png",res = 300,units = 'in',height = 3, width = 6)
+# print(density_breast)
+# dev.off()
+```
+
+
+### Scatter and line plot Slide 2, panel C 
+
+```{r slide2-plotC}
+breast_join %>% 
+  mutate(year = as.numeric(year.x)) %>%
+  rename(Country = country.x,
+         Screening = value_5y,
+         Survival = mortality, ) %>% 
+  mutate(name_lab = if_else(year == 2009, Country, NA_character_)) %>% 
+  ggplot(aes(x= Screening, y = Survival)) +
+  geom_path(aes(group = Country, colour = Country),
+            alpha = 1,
+            linewidth = 1,
+            linejoin = 'round')+
+  geom_text_repel(aes(color = Country, label = name_lab),
+                  fontface = "bold",
+                  size = 5,
+                  direction = "y",
+                  xlim = c(95, NA),
+                  hjust = 0,
+                  segment.size = .7,
+                  segment.alpha = 0,
+                  box.padding = .4,
+                  segment.curvature = -0.1,
+                  segment.ncp = 3,
+                  segment.angle = 20)+
+  geom_point(size = 0.5, shape = 16) +
+  geom_text_repel(aes(label = year),
+    size = 3,
+    direction = "both",
+    force_pull = 10,
+    segment.size = 0.5,
+    segment.alpha = 1,
+    segment.linetype = "dotted",
+    box.padding = 0.2,
+    segment.curvature = -0.11,
+    segment.ncp = 3,
+    segment.angle = 20) +
+  scale_colour_manual(values = colour_vec) +
+  scale_x_continuous(limits = c(30,100),
+                     breaks = seq(30,100, 10),
+                     expand = expansion(mult=c(0.05,.12)))+
+  scale_y_continuous(limits = c(65,95),
+                     breaks = seq(65,95, 15))+
+  theme_minimal() +
+  labs(title = 'Screening and patient\'s survival over time for breast neoplasms',
+       x = 'Screening (% target population)',
+       y='Net Survival (% of population with disease)') +
+  theme(plot.title = element_text(size = 15, hjust = 0.5,face = "bold"),
+        plot.subtitle = element_text(size=8,hjust = 0.5,face = "bold"),
+        axis.title =  element_text(size = 12, hjust = 0.5,face = "bold")) +
+  guides(colour='none')-> breast_mortalityscreening
+
+print(breast_mortalityscreening)
+
+
+#uncomment lines below for saving
+
+# png(filename = 'Rplots/breast_plt.png',res = 300,width = 6.8, height = 5.8, units = 'in')
+# print(breast_mortalityscreening)
+# dev.off()
+```
+## Scotland data, source: Public Health Scotland
+
+```{r load-scot-phs}
+#read file dictionary of health boards names and codes
+# source: https://geoportal.statistics.gov.uk/documents/844159d820da487686d124a25e2eb84d/about
+hb21 <- read.csv("data/2_hbscot_codes_name.csv")
+
+#read a simple geojson to generate the map 
+# source: https://www.arcgis.com/apps/mapviewer/index.html?layers=52aecbed981b42e6ab4030510873e6dd
+map_HB_scot <- st_read("data/3_hbscot_map.geojson")
+
+# read mortality data Scotland per Health Board
+# source: https://www.opendata.nhs.scot/dataset/cancer-mortality/resource/f0446372-e55a-441e-ae71-0b21a1cdda2c
+mort <- read.csv("data/4_mortality_hbScot_24112024.csv")
+
+
+# filter mortality for breast cases
+mort_filter <- mort %>%
+  filter(Year == '2016-2020', 
+         CancerSite == 'Breast', 
+         Sex == 'Female')
+
+#merge mortality dataset with dictionary
+mort_filter_hb21 <- merge(hb21, mort_filter, by.x = 'HB21CD', by.y = 'HB') %>%
+  # adding \n so long HB names with & get split
+  mutate(HB21NM = str_replace_all(HB21NM," and ", "\n & " ))
+
+map_HB_scot. <- map_HB_scot %>% 
+  mutate(h06_name = str_replace_all(h06_name," & ", "\n & " ))
+
+# merge mortality and the dataframe from the map by Health Board name
+map_HBmortality_scot <- merge(map_HB_scot, mort_filter_hb21, by.x = 'h06_name', by.y = 'HB21NM')
+```
+### Map plot slide 4, panel A
+
+```{r plot-map}
+# Plot with ggplot2's sf geom
+ggplot(data = map_HBmortality_scot, mapping = aes(label=h06_name)) +
+  #map the world-age standardised rate (WASR) of deaths
+  geom_sf(aes(fill = WASR), color='white') +
+  scale_fill_fermenter(direction = 1, palette = "GnBu")+  
+  geom_sf_text(fontface = "bold",size = 2)+
+  labs(title = "Breast cancer mortality in Scotland",
+       subtitle = "World age-standardised mortality rate (WASR) per 100,000 person-years at risk \n for period 2016-2020 across all cancer types by Health Board.",
+       caption = "Source: Public Health Scotland (https://www.opendata.nhs.scot).") +  
+  theme_map()+
+  theme(
+    legend.position = "top",
+    legend.justification = 0.5,
+    legend.key.size = unit(0.75, "cm"),
+    legend.key.width = unit(1.0, "cm"),
+    legend.text = element_text(size = 8),
+    legend.margin = margin(),
+    plot.title = element_text(size = 15, hjust = 0.5,face = "bold"),
+    plot.subtitle = element_text(size=8,hjust = 0.5,face = "bold")
+  )-> breast_map
+
+print(breast_map)
+
+#uncomment lines below for saving
+# png("Rplots/map_breast_scot.png",res = 300,units = 'in',height = 6, width = 5)
+# print(breast_map)
+# dev.off()
+```
+### Breast screening in Scotland. Figure slide 4, panel B
+
+```{r scot-breast-screening, message=F}
+# data load and wrangling
+#data source: 
+screening_scotland <- read_excel("data/5_screening_hbscot_2223.xlsx")
+hb_names <- str_replace_all(map_HB_scot.$h06_name, '\n', '')
+
+colour_vec_hb <- met.brewer("VanGogh2", length(hb_names))
+names(colour_vec_hb)<- hb_names
+
+#add color black for national level screening rates
+colour_vec_hb_scot = c(colour_vec_hb,  setNames("black", "Scotland"))
+#define line type vector, segmented for national level
+lty_hb_scot <- c(rep(1, length(hb_names)), 2)
+names(lty_hb_scot)<- names(colour_vec_hb_scot)
+```
+
+```{r plot-scotl-breast-screening}
+screening_scotland %>% 
+  select(`Scottish Breast Screening Programme`:...12) %>% 
+  filter(`Scottish Breast Screening Programme` %in% c(hb_names, "Scotland","NHS Board of Residence")) %>% 
+  row_to_names(row_number = 1) %>% 
+  select(where( ~!all(is.na(.x)))) %>%
+  pivot_longer(names_to = "Period", 
+               cols = `2011/14`:`2020/23`,
+               values_to = 'Uptake') %>% 
+  rename(hb_name = `NHS Board of Residence`) %>% 
+  separate_wider_delim(Period,"/", names = c(NA, "Period")) %>% 
+mutate(Uptake = as.numeric(Uptake),
+       Period = as.numeric(Period),
+       hb_name = factor(hb_name),
+       hb_name_label = ifelse(Period == 23, as.character(hb_name), NA_character_),
+       #hb_name_label = str_replace_all(hb_name_label, "&", "\n&")
+       ) %>% #View()
+  ggplot(aes(Period, Uptake, group = hb_name, 
+             linetype = hb_name,
+             label = hb_name_label)) +
+  geom_line(aes(colour = hb_name))+
+  geom_text_repel(aes(label = str_replace_all(hb_name_label, "&", "\n&"), 
+                      colour = hb_name_label),
+                  fontface = "bold",
+                  size = 3.8,
+                  direction = "y",
+                  segment.alpha = 0,
+                  xlim = c(23.5, NA),
+                  hjust = 0,
+                  box.padding = .45) +
+  scale_colour_manual(values = colour_vec_hb_scot)+
+  scale_linetype_manual(values = lty_hb_scot) +
+  #show target screenign rate at 80%
+  geom_segment(aes(x = 14, xend = 23, y = 80, yend = 80), colour= 'black') +
+  geom_label(aes(x = 19, y=80, label="Target"), fill='white') +
+  scale_x_continuous(expand=expand_scale(mult=c(0.05,.6)),
+                     labels = paste0("20",seq(11,20),"-20",seq(14,23)),
+                     breaks = seq(14,23)) +
+  guides(colour = 'none', linetype = 'none')+
+  labs(title = 'Screening of malignant neoplasms of the breast',
+       subtitle = "Health Board screening over three-year rolling period. \nTarget population: Female, 50-70 years old.",
+       caption = "Source: Public Health Scotland (https://publichealthscotland.scot/)",
+       y = 'Screening (% target population)',
+       x = 'Three-year rolling period') +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 15, hjust = 0.5,face = "bold"),
+        plot.subtitle = element_text(size = 8,hjust = 0.5,face = "bold"),
+        axis.text.x = element_text(angle = 45)) -> scot_screen_breast
+
+print(scot_screen_breast)
+
+#uncomment next lines for saving
+
+# png("Rplots/screening_breast_scot.png",res = 300,units = 'in',height = 8, width = 8)
+# print(scot_screen_breast)
+# dev.off()
+```
+### Annex: Session info
+```{r session-info, echo=FALSE}
+pander(sessionInfo())
+```
