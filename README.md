@@ -7,7 +7,11 @@ Creator and maintainer: Simon Castillo (s.p.castillo-barahona@sms.ed.ac.uk)
 ### Contents
     .
     ├── B277001_presentation_code.Rmd<------------# rmd file reproducibility plots in presentation
-    ├── B277001_presentation_code.html<-----------# hmtl from knotting rmd
+    ├── B277001_presentation_code.html<-----------# hmtl from knitting rmd
+    ├── B277001_datathonreport_08122024.aux<------# aux
+    ├── B277001_datathonreport_08122024.pdf<------# rendered pdf from knitting rmd
+    ├── B277001_datathonreport_08122024.Rmd<------# rmd with final project report
+    ├── references.bib<---------------------------# references for rmd
     ├── data<-------------------------------------# zipped datset, need to unzip
     │   ├── 0_screening_oecd_24112024.csv<--------# worldwide data about screening strategies, source: OECD
     │   ├── 1_survival_oecd_24112024.csv<---------# worldwide data about canecr survival, source: OECD
